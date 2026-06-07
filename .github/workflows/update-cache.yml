@@ -2,13 +2,19 @@ name: Update IPTV Cache
 
 on:
   schedule:
-    # Runs every day at 03:00 UTC
-    - cron: '0 3 * * *'
-  workflow_dispatch: # Allow manual trigger
+    - cron: '0 3 * * *'   # Every day at 03:00 UTC
+  workflow_dispatch:        # Manual trigger
+    inputs:
+      skip_validation:
+        description: 'Skip stream URL validation (faster, less accurate)'
+        required: false
+        default: 'false'
+        type: boolean
 
 jobs:
   update-cache:
     runs-on: ubuntu-latest
+    timeout-minutes: 60     # Stream validation can take a while
     permissions:
       contents: write
 
@@ -16,46 +22,91 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Fetch IPTV-Org data
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Fetch raw data from iptv-org
         run: |
           mkdir -p cache
 
-          echo "Fetching channels..."
-          curl -sSL "https://iptv-org.github.io/api/channels.json" \
+          echo "→ channels.json"
+          curl -sSL --retry 3 --retry-delay 5 \
+            "https://iptv-org.github.io/api/channels.json" \
             -o cache/channels_raw.json
 
-          echo "Fetching streams..."
-          curl -sSL "https://iptv-org.github.io/api/streams.json" \
+          echo "→ streams.json"
+          curl -sSL --retry 3 --retry-delay 5 \
+            "https://iptv-org.github.io/api/streams.json" \
             -o cache/streams_raw.json
 
-          echo "Fetching countries..."
-          curl -sSL "https://iptv-org.github.io/api/countries.json" \
-            -o cache/countries.json
-
-          echo "Fetching categories..."
-          curl -sSL "https://iptv-org.github.io/api/categories.json" \
-            -o cache/categories.json
-
-          echo "Fetching languages..."
-          curl -sSL "https://iptv-org.github.io/api/languages.json" \
-            -o cache/languages.json
-
-          echo "Fetching guides (EPG)..."
-          curl -sSL "https://iptv-org.github.io/api/guides.json" \
+          echo "→ guides.json"
+          curl -sSL --retry 3 --retry-delay 5 \
+            "https://iptv-org.github.io/api/guides.json" \
             -o cache/guides_raw.json
 
-      - name: Process and merge data
-        run: |
-          python3 scripts/process_cache.py
+          echo "→ countries.json"
+          curl -sSL --retry 3 --retry-delay 5 \
+            "https://iptv-org.github.io/api/countries.json" \
+            -o cache/countries.json
 
-      - name: Write build timestamp
-        run: |
-          echo "{\"built_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\", \"channels\": $(jq length cache/channels.json), \"streams\": $(jq length cache/streams.json)}" > cache/meta.json
+          echo "→ categories.json"
+          curl -sSL --retry 3 --retry-delay 5 \
+            "https://iptv-org.github.io/api/categories.json" \
+            -o cache/categories.json
 
-      - name: Commit and push cache
+          echo "→ languages.json"
+          curl -sSL --retry 3 --retry-delay 5 \
+            "https://iptv-org.github.io/api/languages.json" \
+            -o cache/languages.json
+
+          # Print raw counts for logging
+          echo ""
+          echo "Raw counts:"
+          echo "  channels : $(jq length cache/channels_raw.json)"
+          echo "  streams  : $(jq length cache/streams_raw.json)"
+          echo "  guides   : $(jq length cache/guides_raw.json)"
+
+      - name: Process and validate streams
+        run: |
+          ARGS=""
+          if [ "${{ inputs.skip_validation }}" = "true" ]; then
+            ARGS="--no-validate"
+            echo "⚠ Skipping stream validation"
+          fi
+          python3 scripts/process_cache.py $ARGS
+
+      - name: Write build metadata
+        run: |
+          CHANNELS=$(jq length cache/channels.json)
+          STREAMS=$(jq '[.[].streams[]] | length' cache/channels.json)
+          ONLINE=$(jq '[.[].streams[] | select(.status=="online")] | length' cache/channels.json)
+          echo "{
+            \"built_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",
+            \"channels\": $CHANNELS,
+            \"streams\": $STREAMS,
+            \"online\": $ONLINE
+          }" | jq . > cache/meta.json
+          echo ""
+          echo "Build summary:"
+          cat cache/meta.json
+
+      - name: Remove raw files (not needed at runtime)
+        run: |
+          rm -f cache/channels_raw.json cache/streams_raw.json cache/guides_raw.json
+
+      - name: Commit and push updated cache
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add cache/
-          git diff --staged --quiet || git commit -m "chore: update IPTV cache $(date -u +%Y-%m-%d)"
-          git push
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+          else
+            CHANNELS=$(jq '.channels' cache/meta.json)
+            ONLINE=$(jq '.online' cache/meta.json)
+            git commit -m "cache: update $(date -u +%Y-%m-%d) · ${CHANNELS} channels · ${ONLINE} live streams"
+            git push
+            echo "✓ Cache pushed."
+          fi
