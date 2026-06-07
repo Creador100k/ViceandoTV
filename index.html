@@ -784,12 +784,8 @@
     <div class="sidebar-section">
       <div class="sidebar-label">Filter</div>
       <button class="filter-btn active" data-filter="all" data-type="special">
-        <span>All Channels</span>
+        <span>🔴 All Live Channels</span>
         <span class="filter-count" id="count-all">—</span>
-      </button>
-      <button class="filter-btn" data-filter="streams" data-type="special">
-        <span>🔴 With Stream</span>
-        <span class="filter-count" id="count-streams">—</span>
       </button>
     </div>
 
@@ -926,7 +922,6 @@
     filterLabel:  $('active-filter-label'),
     clearFilter:  $('clear-filter'),
     countAll:     $('count-all'),
-    countStreams:  $('count-streams'),
     // player
     overlay:      $('player-overlay'),
     playerLogo:   $('player-logo'),
@@ -974,40 +969,48 @@
   }
 
   async function loadData() {
-    // Try cached version first (GitHub Actions), fallback to live API
-    const sources = [
-      { slim: `${CACHE_BASE}/channels_slim.json`,   full: `${CACHE_BASE}/channels.json`,   countries: `${CACHE_BASE}/countries.json`,   cats: `${CACHE_BASE}/categories.json`,   meta: `${CACHE_BASE}/meta.json` },
-      { slim: `${API_BASE}/channels.json`,          full: `${API_BASE}/channels.json`,     countries: `${API_BASE}/countries.json`,     cats: `${API_BASE}/categories.json`,     meta: null },
-    ];
+    let slim, countries, cats, meta;
 
-    let slim, channels, countries, cats, meta;
-
-    for (const src of sources) {
+    // ── 1. Try GitHub Actions cache first ────────────────────────
+    try {
+      [slim, countries, cats] = await Promise.all([
+        fetchJSON(`${CACHE_BASE}/channels_slim.json`),
+        fetchJSON(`${CACHE_BASE}/countries.json`),
+        fetchJSON(`${CACHE_BASE}/categories.json`),
+      ]);
+      try { meta = await fetchJSON(`${CACHE_BASE}/meta.json`); } catch(_) {}
+    } catch(_) {
+      // ── 2. Fallback: live iptv-org API ────────────────────────
+      // channels.json alone has no stream info, so we also fetch
+      // streams.json to mark only channels that actually have URLs.
       try {
         [slim, countries, cats] = await Promise.all([
-          fetchJSON(src.slim),
-          fetchJSON(src.countries),
-          fetchJSON(src.cats),
+          fetchJSON(`${API_BASE}/channels.json`),
+          fetchJSON(`${API_BASE}/countries.json`),
+          fetchJSON(`${API_BASE}/categories.json`),
         ]);
-        channels = slim; // slim IS the full list from live API; from cache it's the slim version
-        if (src.meta) {
-          try { meta = await fetchJSON(src.meta); } catch(_) {}
-        }
-        break;
+        const streamsRaw = await fetchJSON(`${API_BASE}/streams.json`);
+        const channelsWithStream = new Set(
+          streamsRaw.filter(s => s.channel && !s.is_nsfw).map(s => s.channel)
+        );
+        slim = slim.map(ch => ({
+          ...ch,
+          has_stream: channelsWithStream.has(ch.id),
+          logo: `https://iptv-org.github.io/iptv/logo/${ch.id}.png`,
+        }));
       } catch(e) {
-        console.warn('Source failed, trying next…', e);
+        throw new Error('All data sources failed: ' + e.message);
       }
     }
-
-    if (!slim) throw new Error('All data sources failed.');
 
     // Build country map
     countries.forEach(c => {
       COUNTRY_FLAGS[c.code] = { name: c.name, flag: countryFlag(c.code) };
     });
 
-    state.slim       = slim.filter(c => !c.is_nsfw && !c.closed);
-    state.channels   = state.slim;
+    // Only show channels that have at least one stream
+    state.slim     = slim.filter(c => !c.is_nsfw && !c.closed && c.has_stream);
+    state.channels = state.slim;
     state.countries  = countries.filter(c =>
       slim.some(ch => ch.country === c.code)
     ).sort((a,b) => a.name.localeCompare(b.name));
@@ -1035,9 +1038,7 @@
       if (ch.country) countryCounts[ch.country] = (countryCounts[ch.country] || 0) + 1;
     });
 
-    const streamCount = state.channels.filter(c => c.has_stream).length;
-    el.countAll.textContent    = state.channels.length.toLocaleString();
-    el.countStreams.textContent = streamCount.toLocaleString();
+    el.countAll.textContent = state.channels.length.toLocaleString();
 
     // Categories
     el.catList.innerHTML = state.categories
@@ -1084,9 +1085,7 @@
     const q = state.search.trim().toLowerCase();
 
     // Filter by type
-    if (type === 'special' && value === 'streams') {
-      result = result.filter(c => c.has_stream);
-    } else if (type === 'category') {
+    if (type === 'category') {
       result = result.filter(c => c.categories && c.categories.includes(value));
     } else if (type === 'country') {
       result = result.filter(c => c.country === value);
@@ -1113,9 +1112,8 @@
     state.filtered = result;
 
     // Update toolbar + pill
-    let title = 'All Channels';
-    if (type === 'special' && value === 'streams') title = '🔴 Live Streams';
-    else if (type === 'category') {
+    let title = '🔴 All Live Channels';
+    if (type === 'category') {
       const cat = state.categories.find(c => c.id === value);
       title = cat ? cat.name : value;
       showFilterPill(title);
@@ -1486,11 +1484,9 @@
       buildSidebar();
       applyFilters();
 
-      const total   = state.channels.length;
-      const streams = state.channels.filter(c => c.has_stream).length;
+      const total = state.channels.length;
       el.statsHeader.innerHTML = `
-        <span class="stat-val">${total.toLocaleString()}</span> channels · 
-        <span class="stat-val">${streams.toLocaleString()}</span> streams
+        <span class="stat-val">${total.toLocaleString()}</span> live channels
       `;
 
       renderBuildBar();
