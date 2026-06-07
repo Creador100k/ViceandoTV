@@ -1472,8 +1472,8 @@
     const label = isNaN(d.getTime()) ? meta.built_at : d.toLocaleString();
     el.buildBar.style.display = 'flex';
     el.buildBar.innerHTML = `
-      <span>Data: <a href="https://github.com/iptv-org/api" target="_blank" rel="noopener">iptv-org/api</a></span>
-      <span>Cache built: ${label} · ${meta.channels?.toLocaleString()||'?'} channels · ${meta.streams?.toLocaleString()||'?'} streams</span>
+      <span>Data: <a href="https://github.com/iptv-org/api" target="_blank" rel="noopener">iptv-org/api</a> · verified daily</span>
+      <span>Updated: ${label} · ${meta.channels?.toLocaleString()||'?'} channels · ${meta.online?.toLocaleString()||meta.streams?.toLocaleString()||'?'} live streams verified</span>
     `;
   }
 
@@ -1485,9 +1485,10 @@
       applyFilters();
 
       const total = state.channels.length;
-      el.statsHeader.innerHTML = `
-        <span class="stat-val">${total.toLocaleString()}</span> live channels
-      `;
+      const onlineCount = state.meta?.online;
+      el.statsHeader.innerHTML = onlineCount
+        ? `<span class="stat-val">${total.toLocaleString()}</span> channels · <span class="stat-val">${onlineCount.toLocaleString()}</span> verified live`
+        : `<span class="stat-val">${total.toLocaleString()}</span> live channels`;
 
       renderBuildBar();
     } catch(e) {
