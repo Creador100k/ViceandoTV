@@ -1,0 +1,61 @@
+name: Update IPTV Cache
+
+on:
+  schedule:
+    # Runs every day at 03:00 UTC
+    - cron: '0 3 * * *'
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  update-cache:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Fetch IPTV-Org data
+        run: |
+          mkdir -p cache
+
+          echo "Fetching channels..."
+          curl -sSL "https://iptv-org.github.io/api/channels.json" \
+            -o cache/channels_raw.json
+
+          echo "Fetching streams..."
+          curl -sSL "https://iptv-org.github.io/api/streams.json" \
+            -o cache/streams_raw.json
+
+          echo "Fetching countries..."
+          curl -sSL "https://iptv-org.github.io/api/countries.json" \
+            -o cache/countries.json
+
+          echo "Fetching categories..."
+          curl -sSL "https://iptv-org.github.io/api/categories.json" \
+            -o cache/categories.json
+
+          echo "Fetching languages..."
+          curl -sSL "https://iptv-org.github.io/api/languages.json" \
+            -o cache/languages.json
+
+          echo "Fetching guides (EPG)..."
+          curl -sSL "https://iptv-org.github.io/api/guides.json" \
+            -o cache/guides_raw.json
+
+      - name: Process and merge data
+        run: |
+          python3 scripts/process_cache.py
+
+      - name: Write build timestamp
+        run: |
+          echo "{\"built_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\", \"channels\": $(jq length cache/channels.json), \"streams\": $(jq length cache/streams.json)}" > cache/meta.json
+
+      - name: Commit and push cache
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add cache/
+          git diff --staged --quiet || git commit -m "chore: update IPTV cache $(date -u +%Y-%m-%d)"
+          git push
