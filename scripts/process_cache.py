@@ -75,6 +75,11 @@ def main():
 
         streams   = stream_index.get(cid, [])
         has_stream = len(streams) > 0
+
+        # Skip channels with no streams at all
+        if not has_stream:
+            continue
+
         guides    = guide_index.get(cid, [])
 
         # Build logo URL from iptv-org CDN
