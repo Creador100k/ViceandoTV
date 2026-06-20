@@ -82,7 +82,16 @@ body.locked #reticle{opacity:0}
   pointer-events:none;
   background:linear-gradient(180deg,rgba(5,5,7,.7),transparent);
 }
-#wordmark{font-family:'Syne',sans-serif;font-weight:800;font-size:17px;letter-spacing:2px}
+#wordmark{font-family:'Syne',sans-serif;font-weight:800;font-size:17px;letter-spacing:2px;
+  text-decoration:none;color:var(--signal);pointer-events:auto;transition:opacity .25s;white-space:nowrap;
+  display:flex;align-items:center;gap:12px}
+#wordmark:hover{opacity:.75}
+#wordmark em{font-style:normal;color:var(--fire)}
+#wordmark .wm-sep{width:1px;height:14px;background:rgba(238,240,246,.2);flex-shrink:0}
+#wordmark .wm-sub{font-size:10px;letter-spacing:3px;color:var(--fire);font-weight:700;
+  border:1px solid rgba(255,94,58,.35);border-radius:4px;padding:2px 7px;
+  display:flex;align-items:center;gap:4px}
+#wordmark .wm-sub svg{width:9px;height:9px;stroke:var(--fire);fill:none;stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0}
 #wordmark em{font-style:normal;color:var(--fire)}
 #sector{display:none}
 #hint{position:fixed;bottom:calc(18px + env(safe-area-inset-bottom,0));left:0;right:0;z-index:6;
@@ -167,12 +176,12 @@ body.locked #reticle{opacity:0}
 /* ── GÉNESIS ── */
 #genesis{position:fixed;inset:0;z-index:50;background:var(--void);
   display:flex;align-items:center;justify-content:center;flex-direction:column;gap:26px;
-  transition:opacity .8s ease}
+  transition:opacity .8s ease;text-align:center;padding:0 24px}
 #genesis.out{opacity:0;pointer-events:none}
-#g-mark{font-family:'Syne',sans-serif;font-weight:800;font-size:clamp(34px,8vw,76px);letter-spacing:3px;
-  opacity:0;animation:gin 1.1s .25s cubic-bezier(.2,.8,.2,1) forwards}
+#g-mark{font-family:'Syne',sans-serif;font-weight:800;font-size:clamp(28px,7vw,76px);letter-spacing:clamp(2px,.4vw,6px);
+  opacity:0;animation:gin 1.1s .25s cubic-bezier(.2,.8,.2,1) forwards;white-space:nowrap}
 #g-mark em{font-style:normal;color:var(--fire)}
-#g-sub{font-size:10px;letter-spacing:7px;text-transform:uppercase;color:var(--signal-dim);
+#g-sub{font-size:clamp(9px,1.2vw,11px);letter-spacing:clamp(4px,.6vw,8px);text-transform:uppercase;color:var(--signal-dim);
   opacity:0;animation:gin 1s .8s ease forwards}
 @keyframes gin{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
 
@@ -196,7 +205,11 @@ body.locked #reticle{opacity:0}
 <div id="reticle"></div>
 
 <div id="strip">
-  <div id="wordmark">VICIO<em>▸</em>CONTINUUM</div>
+  <a id="wordmark" href="https://viciotv.github.io/viciotv/" target="_blank" rel="noopener">
+    <span>VICIO<em>▸</em>CONTINUUM</span>
+    <span class="wm-sep"></span>
+    <span class="wm-sub"><svg viewBox="0 0 10 10"><polyline points="2 5 5 2 8 5"/><polyline points="2 8 5 5 8 8"/></svg>IR A VICIOTV <span style="color:rgba(238,240,246,.35);font-weight:400;letter-spacing:0;margin:0 4px">|</span> Peliculas y Series <span style="font-style:normal">◂</span></span>
+  </a>
   <div id="sector"><span class="dot"></span><span id="sector-name">Deriva libre</span></div>
 </div>
 
@@ -4323,7 +4336,7 @@ const MORPH = {
   music:         { spin:.04,  bob:0,  wave:1 },
   kids:          { spin:.025, bob:42, bobF:1.15 },
   documentary:   { spin:.01,  bob:14, bobF:.5,  breathe:1 },
-  entertainment: { spin:.24,  bob:0 },
+  entertainment: { spin:.12,  bob:0 },
   general:       { spin:.016, bob:8,  bobF:.7,  breathe:1 },
   orbita:        { spin:.12,  bob:6,  bobF:1 },
 };
@@ -4417,33 +4430,71 @@ function buildSpace(channels){
       byCountry[c].push(ch);
     });
 
-    /* ordenar países por cantidad de canales, priorizar conocidos */
+    /* INT se divide en sub-grupos por categoría para evitar el cono gigante */
+    const INT_CAT_NAMES = {
+      sports:'INT·Deportes', news:'INT·Noticias', movies:'INT·Cine',
+      music:'INT·Música', kids:'INT·Infantil', documentary:'INT·Documental',
+      entertainment:'INT·Entretenimiento', general:'INT·General',
+    };
+    const INT_CAT_HUE = {
+      sports:'#ff5e3a', news:'#4fd8ff', movies:'#b48bff', music:'#ff5ea8',
+      kids:'#ffc44f', documentary:'#5fe8a0', entertainment:'#ff9650', general:'#8fa0c0',
+    };
+    if (byCountry['INT'] && byCountry['INT'].length > 0){
+      const intChannels = byCountry['INT'];
+      delete byCountry['INT'];
+      intChannels.forEach(ch => {
+        const moodId = moodOf(ch.categories).id;
+        const key = 'INT_' + moodId;
+        if (!byCountry[key]) byCountry[key] = [];
+        byCountry[key].push(ch);
+      });
+    }
+
+    /* función para obtener hue y label de cualquier clave de país */
+    const getCountryMeta = (c) => {
+      if (c.startsWith('INT_')){
+        const moodId = c.replace('INT_','');
+        return { hue: INT_CAT_HUE[moodId] || '#8fa0c0', label: INT_CAT_NAMES[moodId] || 'INT·Varios' };
+      }
+      return { hue: countryHue(c), label: flag(c) + ' ' + countryName(c) };
+    };
+
+    /* ordenar: países reales primero por prioridad, luego INT sub-grupos al final */
     const PRIORITY = ['AR','US','GB','MX','BR','ES','CO','CL','PE','UY','FR','DE','IT','PT'];
-    const countries = Object.keys(byCountry)
-      .filter(c => byCountry[c].length >= 2)
+    const realCountries = Object.keys(byCountry)
+      .filter(c => !c.startsWith('INT_') && byCountry[c].length >= 1)
       .sort((a,b) => {
         const pa = PRIORITY.indexOf(a), pb = PRIORITY.indexOf(b);
         if (pa>=0 && pb>=0) return pa-pb;
         if (pa>=0) return -1; if (pb>=0) return 1;
         return byCountry[b].length - byCountry[a].length;
       });
+    const intGroups = Object.keys(byCountry)
+      .filter(c => c.startsWith('INT_') && byCountry[c].length >= 1);
+    const allGroups = [...realCountries, ...intGroups];
 
-    /* crear una mood-like para cada país */
-    countries.forEach((c, i) => {
-      const a = (i/countries.length) * Math.PI*2 - Math.PI/2;
-      const hue = countryHue(c);
+    /* universo más grande para que los soles tengan más espacio entre sí */
+    const RR = 5500;
+
+    /* crear soles distribuidos en espiral para mayor separación */
+    allGroups.forEach((c, i) => {
+      const a = (i / allGroups.length) * Math.PI * 2 - Math.PI / 2;
+      /* alternar distancia para que no todos caigan en el mismo radio */
+      const radiusVariation = RR * (0.75 + (i % 3) * 0.12);
+      const meta = getCountryMeta(c);
       const countryMood = {
         id: 'country_' + c,
-        label: flag(c) + ' ' + countryName(c),
-        hue,
+        label: meta.label,
+        hue: meta.hue,
         cats: [],
         _country: c,
       };
       const sun = {
         mood: countryMood,
-        x: Math.cos(a) * R,
-        y: Math.sin(i * 1.9) * 480,
-        z: Math.sin(a) * R,
+        x: Math.cos(a) * radiusVariation,
+        y: Math.sin(i * 2.1) * 800,
+        z: Math.sin(a) * radiusVariation,
         phase: Math.random() * 7,
       };
       suns.push(sun);
@@ -4451,10 +4502,13 @@ function buildSpace(channels){
       const list = byCountry[c];
       list.forEach((ch, j) => {
         const kindForMorph = moodOf(ch.categories).id;
-        const pp = placeParams(kindForMorph, j, list.length);
+        /* radios mucho más grandes: canales más separados entre sí */
+        const baseRad = 550 + Math.sqrt(j) * 160;
+        const ang0 = j * 2.39996;
+        const hVariation = Math.sin(j * 1.8) * 320;
         nodes.push({
           ch, mood: countryMood, sun, kind: kindForMorph,
-          ang0: pp.ang0, rad: pp.rad, h: pp.h, dir: pp.dir,
+          ang0, rad: baseRad, h: hVariation, dir: (j % 2 ? 1 : -1),
           x: sun.x, y: sun.y, z: sun.z,
           phase: Math.random() * 7, r: 2.6 + Math.random() * 2.4,
           img: null, imgTried: false, glow: 0, match: 1,
@@ -4765,8 +4819,8 @@ function frame(ts){
       vel.dolly *= Math.exp((focused ? -3.4 : -2.4)*dt);
       /* borde blando: el continuo te devuelve con un resorte, sin frenazo */
       const dd = Math.hypot(cam.x,cam.z);
-      if (dd > 5300){
-        const over = (dd-5300)/dd;
+      if (dd > 10000){
+        const over = (dd-10000)/dd;
         cam.x -= cam.x*over*Math.min(1, dt*4);
         cam.z -= cam.z*over*Math.min(1, dt*4);
         vel.dolly *= Math.exp(-4*dt);
