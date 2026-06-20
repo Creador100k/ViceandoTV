@@ -5028,14 +5028,22 @@ function setFocused(node){
   else { focused = null; stopPreview(); }
 }
 function updateFocus(){
-  if (!IS_TOUCH){
-    const best = findNodeNear(CX, CY, 95);
-    if (best) setFocused(best);
-    else if (focused){
-      const p = focused._p;
-      const bd = p ? Math.hypot(p.sx-CX, p.sy-CY) / (0.6 + p.s) : 1e9;
-      if (bd > 150) setFocused(null);
-    }
+  /* apuntar con el crosshair (centro de pantalla) sintoniza la señal más
+     cercana, en mobile y en desktop. En mobile el margen es un poco más
+     chico porque el dedo no tiene la precisión de un mouse pero la nave
+     se mueve más lento (sensibilidad reducida), así que apuntar es viable.
+     Esto se había sacado pensando que era la causa del crash en iPhone,
+     pero el costo real era el gradiente de fondo no cacheado (ya resuelto)
+     — este loop es liviano (recorre ~40 nodos en mobile) y no debería
+     pesar de forma significativa. ── */
+  const margin = IS_TOUCH ? 80 : 95;
+  const releaseMargin = IS_TOUCH ? 130 : 150;
+  const best = findNodeNear(CX, CY, margin);
+  if (best) setFocused(best);
+  else if (focused){
+    const p = focused._p;
+    const bd = p ? Math.hypot(p.sx-CX, p.sy-CY) / (0.6 + p.s) : 1e9;
+    if (bd > releaseMargin) setFocused(null);
   }
 
   const tune = $('tune');
