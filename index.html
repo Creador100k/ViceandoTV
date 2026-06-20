@@ -4383,8 +4383,9 @@ function placeParams(kind, i, n){
   }
 }
 /* las posiciones viven: se recalculan cada frame desde sus parámetros polares */
+const NODE_SPEED = 0.5; // velocidad de movimiento de los canales (1 = original)
 function animateNodes(){
-  const t = REDUCED ? 0 : T;
+  const t = (REDUCED ? 0 : T) * NODE_SPEED;
   for (const n of nodes){
     const m = MORPH[n.kind] || MORPH.general;
     const ang = n.ang0 + t * m.spin * n.dir;
