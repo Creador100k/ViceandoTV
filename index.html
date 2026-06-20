@@ -4364,14 +4364,29 @@ const IS_TOUCH = matchMedia('(pointer: coarse)').matches;
 
 const cv = $('space'), ctx = cv.getContext('2d');
 let W=0, H=0, CX=0, CY=0, DPR=1;
-function resize(){
+/* reasignar cv.width/height recrea el buffer de GPU del canvas: es una
+   operación cara. En iOS, el scroll, la barra de direcciones colapsando
+   o el teclado abriendo disparan 'resize' en ráfagas — sin guardas acá
+   eso reconstruye el buffer decenas de veces por segundo y va saturando
+   memoria/GPU hasta que la pestaña se cae. Dos guardas:
+   1) si el tamaño en CSS px no cambió de verdad, no tocar el canvas
+   2) debounce: esperar a que la ráfaga termine antes de reconstruir ── */
+let resizeTimer = null;
+function applyResize(){
+  const w = innerWidth, h = innerHeight;
+  if (w === W && h === H) return; // nada cambió realmente: no recrear el buffer
   DPR = Math.min(devicePixelRatio||1, 1.75);
-  W = innerWidth; H = innerHeight; CX = W/2; CY = H/2;
+  W = w; H = h; CX = W/2; CY = H/2;
   cv.width = W*DPR; cv.height = H*DPR;
   cv.style.width = W+'px'; cv.style.height = H+'px';
   ctx.setTransform(DPR,0,0,DPR,0,0);
 }
-addEventListener('resize', resize); resize();
+function resize(){
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(applyResize, 120);
+}
+addEventListener('resize', resize, {passive:true});
+applyResize(); // primer cálculo, sin esperar el debounce
 
 /* ── sprites de glow cacheados ──
    createRadialGradient es caro si se recrea cada frame por cada nodo visible
