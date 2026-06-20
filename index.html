@@ -4808,7 +4808,7 @@ function makeStick(joyEl, baseEl, stickEl, onMove, onEnd){
   document.body.classList.add('touch-nav');
   $('hint').textContent = 'Stick izquierdo: volar · stick derecho: mirar · tocá una señal para sintonizarla';
 
-  const MAXV = 1650; // velocidad máxima de avance/strafe al stick a tope (antes 2600: se sentía demasiado sensible)
+  const MAXV = 825; // velocidad máxima de avance/strafe al stick a tope (mitad de 1650, a pedido)
   const left = makeStick($('joystick'), $('joy-base'), $('joy-stick'),
     (nx, ny) => {
       stickActive = left.active;
@@ -4820,7 +4820,7 @@ function makeStick(joyEl, baseEl, stickEl, onMove, onEnd){
 
   /* stick derecho: velocidad angular proporcional a la deflexión, como un gamepad real
      (no un drag que arrastra acumulado — soltar el stick centra y la nave deja de girar) */
-  const MAXTURN = 1.15; // rad/seg a tope de deflexión (antes 2.0: giraba demasiado rápido)
+  const MAXTURN = 0.575; // rad/seg a tope de deflexión (mitad de 1.15, a pedido)
   const right = makeStick($('joystick-r'), $('joy-r-base'), $('joy-r-stick'),
     (nx, ny) => {
       rstickActive = right.active;
@@ -4914,7 +4914,14 @@ function handleTap(x,y){
     const p = s._p; if (!p) continue;
     if (Math.hypot(p.sx-x, p.sy-y) < Math.max(34, 60*p.s)) { warpTo(s); return; }
   }
-  if (focused && focused._p && Math.hypot(focused._p.sx-x, focused._p.sy-y) < 70) enterSignal(focused);
+  if (focused && focused._p && Math.hypot(focused._p.sx-x, focused._p.sy-y) < 70) { enterSignal(focused); return; }
+  /* mobile: sin auto-foco por proximidad, el tap mismo busca y sintoniza
+     la señal más cercana al punto tocado (primer tap sintoniza, un
+     segundo tap sobre esa misma señal —caso de arriba— entra) ── */
+  if (IS_TOUCH){
+    const near = findNodeNear(x, y, 70);
+    if (near) setFocused(near);
+  }
 }
 
 function warpTo(sun){
@@ -4980,16 +4987,37 @@ function startPreview(node){
     }catch(e){ stopPreview(); }
   }, 550);
 }
-function updateFocus(){
-  let best=null, bd=1e9;
+/* en mobile, "enfocar" un nodo solo por pasar cerca del centro de pantalla
+   dispara, cada frame, una cadena de trabajo (proyección de distancia a
+   todos los nodos, posible arranque de preview HLS, animaciones de HUD)
+   que es candidata a contribuir al crash reportado en iPhone. En mobile
+   sacamos la búsqueda automática por proximidad: el foco se setea solo
+   por tap explícito sobre un nodo (ver handleTap). En desktop se mantiene
+   el comportamiento original de "mirar para sintonizar". ── */
+function findNodeNear(x, y, maxDist){
+  let best=null, bd=maxDist;
   for (const n of nodes){
     const p = n._p; if (!p || p.z>2300 || p.z<90 || n.match<0.5 || n.dead) continue;
-    const d = Math.hypot(p.sx-CX, p.sy-CY) / (0.6 + p.s);
+    const d = Math.hypot(p.sx-x, p.sy-y) / (0.6 + p.s);
     if (d < bd){ bd=d; best=n; }
   }
-  if (best && bd < 95){
-    if (focused !== best){ focused = best; typed = 0; lockT = 0; startPreview(best); window.sfxBlip && sfxBlip(); }
-  } else if (focused && bd > 150){ focused = null; stopPreview(); }
+  return best;
+}
+function setFocused(node){
+  if (focused === node) return;
+  if (node){ focused = node; typed = 0; lockT = 0; startPreview(node); window.sfxBlip && sfxBlip(); }
+  else { focused = null; stopPreview(); }
+}
+function updateFocus(){
+  if (!IS_TOUCH){
+    const best = findNodeNear(CX, CY, 95);
+    if (best) setFocused(best);
+    else if (focused){
+      const p = focused._p;
+      const bd = p ? Math.hypot(p.sx-CX, p.sy-CY) / (0.6 + p.s) : 1e9;
+      if (bd > 150) setFocused(null);
+    }
+  }
 
   const tune = $('tune');
   if (focused && focused._p){
@@ -5106,14 +5134,30 @@ function frame(ts){
   animateNodes();
   ctx.clearRect(0,0,W,H);
 
-  /* nebulosa de fondo: luz dinámica según sector cercano */
+  /* nebulosa de fondo: luz dinámica según sector cercano.
+     antes esto creaba un createRadialGradient + fillRect de PANTALLA COMPLETA
+     en cada uno de los ~60 frames por segundo — carga sostenida de GPU que,
+     mantenida sin pausa durante la sesión, es candidata fuerte a que iOS
+     mate la pestaña por uso continuo de recursos. El color solo cambia
+     entre un set finito de moods, así que cacheamos el sprite por hue. ── */
   let nearSun=null, nd=1e12;
   for (const s of suns){ const d=(s.x-cam.x)**2+(s.z-cam.z)**2; if(d<nd){nd=d;nearSun=s;} }
   if (nearSun){
-    const g = ctx.createRadialGradient(CX,CY,0,CX,CY,Math.max(W,H)*.8);
-    g.addColorStop(0, nearSun.mood.hue + '14');
-    g.addColorStop(1, 'transparent');
-    ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+    const key = 'nebula:' + nearSun.mood.hue;
+    let neb = glowCache.get(key);
+    if (!neb){
+      neb = document.createElement('canvas');
+      neb.width = neb.height = GLOW_SIZE;
+      const nctx = neb.getContext('2d');
+      const r = GLOW_SIZE/2;
+      const g = nctx.createRadialGradient(r,r,0,r,r,r);
+      g.addColorStop(0, nearSun.mood.hue + '14');
+      g.addColorStop(1, 'transparent');
+      nctx.fillStyle = g;
+      nctx.fillRect(0,0,GLOW_SIZE,GLOW_SIZE);
+      glowCache.set(key, neb);
+    }
+    ctx.drawImage(neb, 0, 0, W, H);
     if (!warp) setSector(nd < 3400*3400 ? nearSun.mood : null);
     window.audioTick && audioTick(nearSun, Math.sqrt(nd));
   }
