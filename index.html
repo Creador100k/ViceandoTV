@@ -111,6 +111,25 @@ body.locked #reticle{opacity:0}
 #sound-btn:hover{border-color:rgba(238,240,246,.4)}
 #sound-btn svg{width:18px;height:18px;stroke:var(--signal);fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 
+/* ── overlay de debug de cámara (temporal, para elegir spawn point) ── */
+#camdbg{position:fixed;top:14px;left:14px;z-index:50;display:none;
+  background:rgba(5,5,7,.7);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  border:1px solid var(--hud-rim);border-radius:10px;padding:10px 12px;
+  font-family:'Space Grotesk',monospace;font-size:11px;color:var(--signal);
+  min-width:190px;pointer-events:auto;user-select:text}
+#camdbg.on{display:block}
+#camdbg .camdbg-row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
+#camdbg .camdbg-row:last-child{margin-bottom:0}
+#camdbg b{font-family:'Syne',sans-serif;font-size:10px;letter-spacing:2px;color:var(--fire)}
+#camdbg .camdbg-hint{font-size:9px;letter-spacing:1px;color:var(--signal-dim);opacity:.7}
+#camdbg-vals{white-space:pre;line-height:1.55;font-size:11.5px;color:var(--signal);
+  background:rgba(255,255,255,.04);border-radius:6px;padding:8px;margin-bottom:8px}
+#camdbg button{font-size:9.5px;letter-spacing:1px;text-transform:uppercase;
+  border:1px solid var(--hud-rim);border-radius:6px;padding:5px 8px;
+  background:rgba(255,255,255,.05);transition:background .2s,border-color .2s;flex:1}
+#camdbg button:hover{background:rgba(255,255,255,.12);border-color:rgba(238,240,246,.4)}
+#camdbg button.copied{border-color:#2ecc71;color:#2ecc71}
+
 /* ── invocación (búsqueda como ritual, no como input de formulario) ── */
 #summon{position:fixed;inset:0;z-index:20;display:none;align-items:flex-start;justify-content:center;
   padding-top:22vh;background:radial-gradient(ellipse at 50% 30%,rgba(5,5,7,.55),rgba(5,5,7,.88));
@@ -201,6 +220,15 @@ body.locked #reticle{opacity:0}
 <body>
 
 <canvas id="space"></canvas>
+
+<div id="camdbg">
+  <div class="camdbg-row"><b>SPAWN DEBUG</b><span class="camdbg-hint">Ctrl+Alt+D</span></div>
+  <div class="camdbg-vals" id="camdbg-vals">x: 0.0&#10;y: 0.0&#10;z: 0.0&#10;yaw: 0.000&#10;pitch: 0.000</div>
+  <div class="camdbg-row">
+    <button id="camdbg-copy">Copiar objeto</button>
+    <button id="camdbg-reset">Reset spawn</button>
+  </div>
+</div>
 <div id="atmos"></div>
 <div id="reticle"></div>
 
@@ -4300,7 +4328,8 @@ function resize(){
 addEventListener('resize', resize); resize();
 
 const FOV = 920;
-const cam = { x:0, y:0, z:-3400, yaw:0, pitch:0 };
+/* spawn point: vista elegida a mano con el overlay de debug (Ctrl+Alt+D) */
+const cam = { x:20.2, y:-1623.31, z:-525.32, yaw:2.7457, pitch:0.3788 };
 const vel = { yaw:0, pitch:0, dolly:0 };
 let warp = null;            // {t, dur, from:{...}, to:{...}, mood}
 let warpStreak = 0;
@@ -5319,6 +5348,49 @@ try{
 setInterval(()=>{ try{localStorage.setItem(CAM_KEY, JSON.stringify({x:cam.x,y:cam.y,z:cam.z,yaw:cam.yaw,pitch:cam.pitch}));}catch(e){} }, 4000);
 setTimeout(()=>{ $('genesis').classList.add('out'); }, REDUCED? 300 : 2100);
 $('genesis').addEventListener('pointerdown', ()=> $('genesis').classList.add('out'));
+
+/* ── overlay de debug de cámara: SOLO para encontrar el spawn point ──
+   Activar/ocultar: Ctrl+Alt+D. No se muestra a usuarios normales. ── */
+(function(){
+  const panel = $('camdbg'), valsEl = $('camdbg-vals');
+  const copyBtn = $('camdbg-copy'), resetBtn = $('camdbg-reset');
+  let on = false, raf = null;
+
+  function fmt(n){ return (Math.round(n*100)/100).toString(); }
+  function tick(){
+    valsEl.textContent =
+      `x: ${fmt(cam.x)}\ny: ${fmt(cam.y)}\nz: ${fmt(cam.z)}\nyaw: ${cam.yaw.toFixed(4)}\npitch: ${cam.pitch.toFixed(4)}`;
+    raf = requestAnimationFrame(tick);
+  }
+  function show(){ on = true; panel.classList.add('on'); tick(); }
+  function hide(){ on = false; panel.classList.remove('on'); if (raf) cancelAnimationFrame(raf); }
+
+  addEventListener('keydown', e=>{
+    if (e.ctrlKey && e.altKey && (e.key==='d' || e.key==='D')){
+      e.preventDefault();
+      on ? hide() : show();
+    }
+  });
+
+  copyBtn.addEventListener('click', ()=>{
+    const obj = `{ x:${fmt(cam.x)}, y:${fmt(cam.y)}, z:${fmt(cam.z)}, yaw:${cam.yaw.toFixed(4)}, pitch:${cam.pitch.toFixed(4)} }`;
+    const done = ()=>{
+      copyBtn.textContent = '✓ copiado'; copyBtn.classList.add('copied');
+      setTimeout(()=>{ copyBtn.textContent='Copiar objeto'; copyBtn.classList.remove('copied'); }, 1300);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(obj).then(done).catch(()=>prompt('Copiá manualmente:', obj));
+    } else {
+      prompt('Copiá manualmente:', obj);
+    }
+  });
+
+  resetBtn.addEventListener('click', ()=>{
+    try{ localStorage.removeItem(CAM_KEY); }catch(e){}
+    cam.x=20.2; cam.y=-1623.31; cam.z=-525.32; cam.yaw=2.7457; cam.pitch=0.3788;
+  });
+})();
+
 </script>
 </body>
 </html>
