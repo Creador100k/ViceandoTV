@@ -4358,6 +4358,10 @@ const countryName = c => COUNTRY_NAMES[c] || c || 'Internacional';
 let constellationMode = 'country';
 
 /* ── escena ── */
+/* detección de dispositivo táctil: gatea joystick, calidad inicial,
+   cap de canales y concurrencia de carga de imágenes en mobile */
+const IS_TOUCH = matchMedia('(pointer: coarse)').matches;
+
 const cv = $('space'), ctx = cv.getContext('2d');
 let W=0, H=0, CX=0, CY=0, DPR=1;
 function resize(){
@@ -4369,9 +4373,82 @@ function resize(){
 }
 addEventListener('resize', resize); resize();
 
+/* ── sprites de glow cacheados ──
+   createRadialGradient es caro si se recrea cada frame por cada nodo visible
+   (con cientos de canales en pantalla, esto es el principal cuello de botella
+   en mobile). En vez de eso: un sprite offscreen pre-renderizado por color,
+   reusado con drawImage (mucho más barato que recalcular el degradado). ── */
+const glowCache = new Map();
+const GLOW_SIZE = 128; // resolución base del sprite; se escala al dibujar
+function glowSprite(hue, alphaHex){
+  const key = hue + (alphaHex||'');
+  let spr = glowCache.get(key);
+  if (spr) return spr;
+  const c = document.createElement('canvas');
+  c.width = c.height = GLOW_SIZE;
+  const gctx = c.getContext('2d');
+  const r = GLOW_SIZE/2;
+  const g = gctx.createRadialGradient(r,r,0,r,r,r);
+  g.addColorStop(0, hue + (alphaHex||'bb'));
+  g.addColorStop(1, 'transparent');
+  gctx.fillStyle = g;
+  gctx.beginPath(); gctx.arc(r,r,r,0,7); gctx.fill();
+  glowCache.set(key, c);
+  return c;
+}
+/* dibuja el sprite cacheado centrado en (x,y) con radio visual rad */
+function drawGlow(x, y, rad, hue, alphaHex){
+  const spr = glowSprite(hue, alphaHex);
+  const d = rad*2;
+  ctx.drawImage(spr, x-rad, y-rad, d, d);
+}
+/* ── cola de carga de logos con concurrencia limitada ──
+   sin esto, entrar de golpe a una constelación densa dispara decenas de
+   descargas+decodificaciones de imagen simultáneas: en mobile eso es lo que
+   va saturando memoria sesión tras sesión hasta que la página se traba. ── */
+const IMG_MAX_CONCURRENT = IS_TOUCH ? 3 : 8;
+let imgLoading = 0;
+const imgQueue = [];
+function queueLogoLoad(node){
+  if (node.imgTried) return;
+  node.imgTried = true;
+  imgQueue.push(node);
+  pumpImgQueue();
+}
+function pumpImgQueue(){
+  while (imgLoading < IMG_MAX_CONCURRENT && imgQueue.length){
+    const node = imgQueue.shift();
+    imgLoading++;
+    const im = new Image();
+    im.onload = im.onerror = ()=>{ imgLoading--; if (im.complete && im.naturalWidth) node.img = im; pumpImgQueue(); };
+    im.src = node.ch.logo;
+  }
+}
+/* variante de 3 paradas (núcleo intenso + halo medio + desvanecido), usada por los soles */
+function glowSprite3(hue){
+  const key = 'sun3:'+hue;
+  let spr = glowCache.get(key);
+  if (spr) return spr;
+  const c = document.createElement('canvas');
+  c.width = c.height = GLOW_SIZE;
+  const gctx = c.getContext('2d');
+  const r = GLOW_SIZE/2;
+  const g = gctx.createRadialGradient(r,r,0,r,r,r);
+  g.addColorStop(0, hue+'cc'); g.addColorStop(.35, hue+'33'); g.addColorStop(1,'transparent');
+  gctx.fillStyle = g;
+  gctx.beginPath(); gctx.arc(r,r,r,0,7); gctx.fill();
+  glowCache.set(key, c);
+  return c;
+}
+function drawGlow3(x, y, rad, hue){
+  const spr = glowSprite3(hue);
+  const d = rad*2;
+  ctx.drawImage(spr, x-rad, y-rad, d, d);
+}
+
 const FOV = 920;
-/* spawn point: vista elegida a mano con el overlay de debug (Ctrl+Alt+D) */
-const cam = { x:20.2, y:-1623.31, z:-525.32, yaw:2.7457, pitch:0.3788 };
+/* spawn point: vista elegida a mano con el overlay de debug (Ctrl+Alt+D) — actualizado para el universo x2 */
+const cam = { x:-1385.08, y:-188.99, z:-9282.84, yaw:-11.2448, pitch:0.0962 };
 const vel = { yaw:0, pitch:0, dolly:0, strafe:0 };
 let warp = null;            // {t, dur, from:{...}, to:{...}, mood}
 let warpStreak = 0;
@@ -4412,16 +4489,18 @@ const MORPH = {
   orbita:        { spin:.12,  bob:6,  bobF:1 },
 };
 function placeParams(kind, i, n){
+  /* x2 en todos los radios/alturas respecto al original, para acompañar
+     el universo más grande (modo país es el activo, pero se mantiene consistente) */
   const ang0 = i * 2.39996;
   switch(kind){
-    case 'sports':        return { ang0, rad:250 + (i%2)*135, h:Math.sin(i*2.7)*55, dir:(i%2? -1:1) };
-    case 'news':          return { ang0, rad:95 + (i%3)*48,   h:((i/Math.max(n,1)) - .5)*940, dir:1 };
-    case 'movies':        return { ang0, rad:120 + Math.sqrt(i)*48, h:Math.sin(i*1.7)*26, dir:1 };
-    case 'music':         return { ang0, rad:150 + Math.sqrt(i)*42, h:0, dir:1 };
-    case 'kids':          return { ang0, rad:90 + Math.random()*300, h:(Math.random()-.5)*440, dir:1 };
-    case 'documentary':   return { ang0, rad:240 + Math.sqrt(i)*90, h:Math.sin(i*1.3)*330, dir:1 };
-    case 'entertainment': { const h = ((i/Math.max(n,1)) - .5)*760; return { ang0, rad:95 + ((h+380)/760)*300, h, dir:1 }; }
-    default:              return { ang0, rad:130 + Math.sqrt(i)*64, h:(Math.sin(i*2.1)*.5 + Math.sin(ang0*.7))*190, dir:1 };
+    case 'sports':        return { ang0, rad:500 + (i%2)*270, h:Math.sin(i*2.7)*110, dir:(i%2? -1:1) };
+    case 'news':          return { ang0, rad:190 + (i%3)*96,   h:((i/Math.max(n,1)) - .5)*1880, dir:1 };
+    case 'movies':        return { ang0, rad:240 + Math.sqrt(i)*96, h:Math.sin(i*1.7)*52, dir:1 };
+    case 'music':         return { ang0, rad:300 + Math.sqrt(i)*84, h:0, dir:1 };
+    case 'kids':          return { ang0, rad:180 + Math.random()*600, h:(Math.random()-.5)*880, dir:1 };
+    case 'documentary':   return { ang0, rad:480 + Math.sqrt(i)*180, h:Math.sin(i*1.3)*660, dir:1 };
+    case 'entertainment': { const h = ((i/Math.max(n,1)) - .5)*1520; return { ang0, rad:190 + ((h+760)/1520)*600, h, dir:1 }; }
+    default:              return { ang0, rad:260 + Math.sqrt(i)*128, h:(Math.sin(i*2.1)*.5 + Math.sin(ang0*.7))*380, dir:1 };
   }
 }
 /* las posiciones viven: se recalculan cada frame desde sus parámetros polares */
@@ -4447,7 +4526,7 @@ const dust = [];            // polvo estelar 3 capas
 
 function buildSpace(channels){
   suns.length = 0; nodes.length = 0;
-  const R = 2500;
+  const R = 5000; // x2 respecto al original, para usar el doble de espacio explorable
 
   if (constellationMode === 'mood'){
     /* ── MODO CATEGORÍA (comportamiento original) ── */
@@ -4464,11 +4543,11 @@ function buildSpace(channels){
                             .sort((a,b)=>(visits[b.id]||0)-(visits[a.id]||0))
                             .slice(0,12);
     if (visited.length >= 3){
-      const osun = { mood:ORBIT_MOOD, x:0, y:-160, z:-1500, phase:Math.random()*7, personal:true };
+      const osun = { mood:ORBIT_MOOD, x:0, y:-320, z:-3000, phase:Math.random()*7, personal:true };
       suns.push(osun);
       visited.forEach((ch,i)=>{
         nodes.push({ ch, mood:moodOf(ch.categories), sun:osun, kind:'orbita',
-          ang0:(i/visited.length)*Math.PI*2, rad:230, h:Math.sin(i*1.3)*70, dir:1,
+          ang0:(i/visited.length)*Math.PI*2, rad:460, h:Math.sin(i*1.3)*140, dir:1,
           x:osun.x, y:osun.y, z:osun.z,
           phase:Math.random()*7, r:3.4, img:null, imgTried:false, glow:0, match:1, orbit:true,
           dead: !!deadMap[ch.id] });
@@ -4546,8 +4625,9 @@ function buildSpace(channels){
       .filter(c => c.startsWith('INT_') && byCountry[c].length >= 1);
     const allGroups = [...realCountries, ...intGroups];
 
-    /* universo más grande para que los soles tengan más espacio entre sí */
-    const RR = 5500;
+    /* universo más grande para que los soles tengan más espacio entre sí
+       (x2 respecto al original, para aprovechar el doble de espacio explorable) */
+    const RR = 11000;
 
     /* crear soles distribuidos en espiral para mayor separación */
     allGroups.forEach((c, i) => {
@@ -4565,7 +4645,7 @@ function buildSpace(channels){
       const sun = {
         mood: countryMood,
         x: Math.cos(a) * radiusVariation,
-        y: Math.sin(i * 2.1) * 800,
+        y: Math.sin(i * 2.1) * 1600,
         z: Math.sin(a) * radiusVariation,
         phase: Math.random() * 7,
       };
@@ -4574,10 +4654,11 @@ function buildSpace(channels){
       const list = byCountry[c];
       list.forEach((ch, j) => {
         const kindForMorph = moodOf(ch.categories).id;
-        /* radios mucho más grandes: canales más separados entre sí */
-        const baseRad = 550 + Math.sqrt(j) * 160;
+        /* radios mucho más grandes: canales más separados entre sí
+           (x2 para acompañar el universo más grande) */
+        const baseRad = 1100 + Math.sqrt(j) * 320;
         const ang0 = j * 2.39996;
-        const hVariation = Math.sin(j * 1.8) * 320;
+        const hVariation = Math.sin(j * 1.8) * 640;
         nodes.push({
           ch, mood: countryMood, sun, kind: kindForMorph,
           ang0, rad: baseRad, h: hVariation, dir: (j % 2 ? 1 : -1),
@@ -4590,8 +4671,10 @@ function buildSpace(channels){
     });
   }
 
+  /* el polvo se extiende x2 para llenar el universo más grande sin sumar
+     partículas (mismo costo de render, solo más disperso) */
   if (!dust.length) for (let i=0;i<340;i++) dust.push({
-    x:(Math.random()-.5)*9000, y:(Math.random()-.5)*5200, z:(Math.random()-.5)*9000,
+    x:(Math.random()-.5)*18000, y:(Math.random()-.5)*10400, z:(Math.random()-.5)*18000,
     layer: i%3, r: .4 + Math.random()*1.1,
   });
 }
@@ -4612,7 +4695,6 @@ function project(px,py,pz, par=1){
 let dragging=false, px0=0, py0=0, moved=0, pinch0=0;
 let stickActive=false; /* true mientras el joystick izquierdo (vuelo) está en uso */
 let rstickActive=false, rstickYaw=0, rstickPitch=0; /* stick derecho: velocidad angular de mirada */
-const IS_TOUCH = matchMedia('(pointer: coarse)').matches; /* mobile usa joystick, no drag-to-rotate */
 let aimX = innerWidth/2, aimY = innerHeight/2;   /* punto al que apuntás */
 addEventListener('pointermove', e => { aimX = e.clientX; aimY = e.clientY; }, {passive:true});
 addEventListener('pointerdown', e => { aimX = e.clientX; aimY = e.clientY; }, {passive:true});
@@ -4683,10 +4765,15 @@ function makeStick(joyEl, baseEl, stickEl, onMove, onEnd){
     const d = Math.hypot(dx,dy);
     if (d > R){ dx = dx/d*R; dy = dy/d*R; }
     setStick(dx, dy);
-    const nx = dx/R, ny = dy/R; // -1..1
+    let nx = dx/R, ny = dy/R; // -1..1
     const mag = Math.hypot(nx,ny);
     if (mag < 0.08){ onMove(0,0,0); return; } // deadzone chica: el temblor del dedo no genera drift
-    onMove(nx, ny, mag);
+    /* curva de respuesta cuadrática: cerca del centro responde suave y preciso,
+       y solo cerca del borde se acerca a la velocidad/giro máximo — da sensación
+       de "peso" e inercia real en vez de un salto inmediato a tope */
+    const curved = mag * mag;
+    const scale = curved / mag;
+    onMove(nx*scale, ny*scale, curved);
     hintFade();
   }
   function end(e){
@@ -4706,7 +4793,7 @@ function makeStick(joyEl, baseEl, stickEl, onMove, onEnd){
   document.body.classList.add('touch-nav');
   $('hint').textContent = 'Stick izquierdo: volar · stick derecho: mirar · tocá una señal para sintonizarla';
 
-  const MAXV = 2600; // velocidad máxima de avance/strafe al stick a tope
+  const MAXV = 1650; // velocidad máxima de avance/strafe al stick a tope (antes 2600: se sentía demasiado sensible)
   const left = makeStick($('joystick'), $('joy-base'), $('joy-stick'),
     (nx, ny) => {
       stickActive = left.active;
@@ -4718,7 +4805,7 @@ function makeStick(joyEl, baseEl, stickEl, onMove, onEnd){
 
   /* stick derecho: velocidad angular proporcional a la deflexión, como un gamepad real
      (no un drag que arrastra acumulado — soltar el stick centra y la nave deja de girar) */
-  const MAXTURN = 2.0; // rad/seg a tope de deflexión
+  const MAXTURN = 1.15; // rad/seg a tope de deflexión (antes 2.0: giraba demasiado rápido)
   const right = makeStick($('joystick-r'), $('joy-r-base'), $('joy-r-stick'),
     (nx, ny) => {
       rstickActive = right.active;
@@ -4818,7 +4905,9 @@ function handleTap(x,y){
 function warpTo(sun){
   const dx = cam.x - sun.x, dz = cam.z - sun.z;
   const d = Math.hypot(dx,dz) || 1;
-  const tx = sun.x + dx/d*780, tz = sun.z + dz/d*780;
+  /* x2 respecto al original: con los canales más separados (baseRad mayor),
+     hay que aterrizar más lejos del sol para seguir viendo la constelación desde afuera */
+  const tx = sun.x + dx/d*1560, tz = sun.z + dz/d*1560;
   const tyaw = Math.atan2(sun.x - tx, sun.z - tz);
   warp = { t:0, dur: REDUCED? .01 : 1.7,
     from:{ x:cam.x,y:cam.y,z:cam.z,yaw:cam.yaw,pitch:cam.pitch },
@@ -4913,7 +5002,9 @@ $('t-enter').addEventListener('click', () => focused && enterSignal(focused));
 /* ── render ── */
 let last=0, T=0;
 /* degradado automático de calidad: la inmersión muere al primer tirón */
-let QUALITY=2, slowFrames=0, fastFrames=0;
+/* en mobile arrancamos livianos: no esperamos a que el detector de lag reaccione
+   (eso tarda ~50 frames lentos, y para entonces ya se sintió el tirón inicial) */
+let QUALITY = IS_TOUCH ? 1 : 2, slowFrames=0, fastFrames=0;
 function tuneQuality(dt){
   if (dt > .03){ if (++slowFrames > 50){ QUALITY=Math.max(0,QUALITY-1); slowFrames=0; fastFrames=0; } }
   else if (dt < .02){ if (++fastFrames > 600 && QUALITY<2){ QUALITY++; fastFrames=0; } slowFrames=Math.max(0,slowFrames-2); }
@@ -4983,16 +5074,17 @@ function frame(ts){
       cam.z += f.z*vel.dolly*dt + r.z*vel.strafe*dt;
       vel.dolly  *= Math.exp((focused ? -3.4 : -2.4)*dt);
       vel.strafe *= Math.exp((focused ? -3.4 : -2.4)*dt);
-      /* borde blando: el continuo te devuelve con un resorte, sin frenazo */
+      /* borde blando: el continuo te devuelve con un resorte, sin frenazo
+         (x2 respecto al original, para acompañar el universo más grande) */
       const dd = Math.hypot(cam.x,cam.z);
-      if (dd > 10000){
-        const over = (dd-10000)/dd;
+      if (dd > 20000){
+        const over = (dd-20000)/dd;
         cam.x -= cam.x*over*Math.min(1, dt*4);
         cam.z -= cam.z*over*Math.min(1, dt*4);
         vel.dolly *= Math.exp(-4*dt);
         vel.strafe *= Math.exp(-4*dt);
       }
-      if (Math.abs(cam.y) > 1700) cam.y = lerp(cam.y, Math.sign(cam.y)*1700, Math.min(1, dt*5));
+      if (Math.abs(cam.y) > 3400) cam.y = lerp(cam.y, Math.sign(cam.y)*3400, Math.min(1, dt*5));
     } else { vel.dolly = 0; vel.strafe = 0; }
   }
 
@@ -5007,7 +5099,7 @@ function frame(ts){
     g.addColorStop(0, nearSun.mood.hue + '14');
     g.addColorStop(1, 'transparent');
     ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
-    if (!warp) setSector(nd < 1700*1700 ? nearSun.mood : null);
+    if (!warp) setSector(nd < 3400*3400 ? nearSun.mood : null);
     window.audioTick && audioTick(nearSun, Math.sqrt(nd));
   }
 
@@ -5031,9 +5123,7 @@ function frame(ts){
     const pulse = 1 + Math.sin(T*1.4 + s.phase)*.1;
     const r = clamp(46*p.s,8,90)*pulse;
     if (QUALITY>0){
-      const g = ctx.createRadialGradient(p.sx,p.sy,0,p.sx,p.sy,r*3);
-      g.addColorStop(0, s.mood.hue+'cc'); g.addColorStop(.35, s.mood.hue+'33'); g.addColorStop(1,'transparent');
-      ctx.fillStyle=g; ctx.beginPath(); ctx.arc(p.sx,p.sy,r*3,0,7); ctx.fill();
+      drawGlow3(p.sx, p.sy, r*3, s.mood.hue);
     } else {
       ctx.fillStyle = s.mood.hue+'55';
       ctx.beginPath(); ctx.arc(p.sx,p.sy,r*1.6,0,7); ctx.fill();
@@ -5075,9 +5165,7 @@ function frame(ts){
     if (r > 1.6){
       ctx.globalAlpha = a*flick;
       if (QUALITY===2){
-        const g = ctx.createRadialGradient(p.sx,p.sy,0,p.sx,p.sy,r*2.6);
-        g.addColorStop(0, n.mood.hue + 'bb'); g.addColorStop(1,'transparent');
-        ctx.fillStyle = g; ctx.beginPath(); ctx.arc(p.sx,p.sy,r*2.6,0,7); ctx.fill();
+        drawGlow(p.sx, p.sy, r*2.6, n.mood.hue, 'bb');
       } else {
         ctx.fillStyle = n.mood.hue + '44';
         ctx.beginPath(); ctx.arc(p.sx,p.sy,r*1.7,0,7); ctx.fill();
@@ -5103,7 +5191,7 @@ function frame(ts){
     }
     /* logo emerge cuando estás cerca */
     else if (r > 11 && n.ch.logo){
-      if (!n.imgTried){ n.imgTried=true; const im=new Image(); im.onload=()=>n.img=im; im.src=n.ch.logo; }
+      if (!n.imgTried) queueLogoLoad(n);
       if (n.img){
         ctx.save();
         ctx.beginPath(); ctx.arc(p.sx,p.sy,r,0,7); ctx.clip();
@@ -5462,7 +5550,9 @@ async function boot(){
     /* curaduría: priorizar señales con logo, balancear por constelación */
     const byMood={}; MOODS.forEach(m=>byMood[m.id]=[]);
     iptv.forEach(c => byMood[moodOf(c.categories).id].push(c));
-    const CAP=85, picked=[];
+    /* en mobile, menos nodos totales: menos costo por frame y menos imágenes
+       de logo decodiéndose en memoria a lo largo de una sesión larga */
+    const CAP = IS_TOUCH ? 40 : 85, picked=[];
     MOODS.forEach(m=>{
       const arr = byMood[m.id].sort((a,b)=>(b.logo?1:0)-(a.logo?1:0));
       picked.push(...arr.slice(0,CAP));
@@ -5525,7 +5615,7 @@ $('genesis').addEventListener('pointerdown', ()=> $('genesis').classList.add('ou
 
   resetBtn.addEventListener('click', ()=>{
     try{ localStorage.removeItem(CAM_KEY); }catch(e){}
-    cam.x=20.2; cam.y=-1623.31; cam.z=-525.32; cam.yaw=2.7457; cam.pitch=0.3788;
+    cam.x=-1385.08; cam.y=-188.99; cam.z=-9282.84; cam.yaw=-11.2448; cam.pitch=0.0962;
   });
 })();
 
