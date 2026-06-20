@@ -110,6 +110,9 @@ body.locked #reticle{opacity:0}
   display:flex;align-items:center;justify-content:center;transition:border-color .25s}
 #sound-btn:hover{border-color:rgba(238,240,246,.4)}
 #sound-btn svg{width:18px;height:18px;stroke:var(--signal);fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+/* en touch el joystick ocupa la esquina inferior izquierda: subimos el botón de sonido para no taparlo */
+body.touch-nav #sound-btn{bottom:calc(170px + env(safe-area-inset-bottom,0))}
+body.touch-nav #summon-btn{bottom:calc(170px + env(safe-area-inset-bottom,0))}
 
 /* ── overlay de debug de cámara (temporal, para elegir spawn point) ── */
 #camdbg{position:fixed;top:14px;left:14px;z-index:50;display:none;
@@ -129,6 +132,33 @@ body.locked #reticle{opacity:0}
   background:rgba(255,255,255,.05);transition:background .2s,border-color .2s;flex:1}
 #camdbg button:hover{background:rgba(255,255,255,.12);border-color:rgba(238,240,246,.4)}
 #camdbg button.copied{border-color:#2ecc71;color:#2ecc71}
+
+/* ── joystick virtual: control de vuelo de la nave en mobile ── */
+#joystick{position:fixed;left:0;bottom:0;z-index:8;display:none;
+  width:clamp(110px,28vw,150px);height:clamp(110px,28vw,150px);
+  margin:0 0 calc(28px + env(safe-area-inset-bottom,0)) 24px;
+  touch-action:none}
+#joystick.on{display:block}
+#joy-base{position:relative;width:100%;height:100%;border-radius:50%;
+  background:rgba(5,5,7,.4);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+  border:1px solid var(--hud-rim)}
+#joy-stick{position:absolute;left:50%;top:50%;width:42%;height:42%;border-radius:50%;
+  background:rgba(238,240,246,.16);border:1px solid rgba(238,240,246,.5);
+  transform:translate(-50%,-50%);transition:background .15s,border-color .15s}
+#joystick.active #joy-stick{background:rgba(240,237,232,.32);border-color:var(--fire)}
+
+#joystick-r{position:fixed;right:0;bottom:0;z-index:8;display:none;
+  width:clamp(110px,28vw,150px);height:clamp(110px,28vw,150px);
+  margin:0 24px calc(28px + env(safe-area-inset-bottom,0)) 0;
+  touch-action:none}
+#joystick-r.on{display:block}
+#joy-r-base{position:relative;width:100%;height:100%;border-radius:50%;
+  background:rgba(5,5,7,.4);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+  border:1px solid var(--hud-rim)}
+#joy-r-stick{position:absolute;left:50%;top:50%;width:42%;height:42%;border-radius:50%;
+  background:rgba(238,240,246,.16);border:1px solid rgba(238,240,246,.5);
+  transform:translate(-50%,-50%);transition:background .15s,border-color .15s}
+#joystick-r.active #joy-r-stick{background:rgba(240,237,232,.32);border-color:var(--fire)}
 
 /* ── invocación (búsqueda como ritual, no como input de formulario) ── */
 #summon{position:fixed;inset:0;z-index:20;display:none;align-items:flex-start;justify-content:center;
@@ -231,6 +261,18 @@ body.locked #reticle{opacity:0}
 </div>
 <div id="atmos"></div>
 <div id="reticle"></div>
+
+<div id="joystick" aria-hidden="true">
+  <div id="joy-base">
+    <div id="joy-stick"></div>
+  </div>
+</div>
+
+<div id="joystick-r" aria-hidden="true">
+  <div id="joy-r-base">
+    <div id="joy-r-stick"></div>
+  </div>
+</div>
 
 <div id="strip">
   <a id="wordmark" href="https://viciotv.github.io/viciotv/" target="_blank" rel="noopener">
@@ -4330,7 +4372,7 @@ addEventListener('resize', resize); resize();
 const FOV = 920;
 /* spawn point: vista elegida a mano con el overlay de debug (Ctrl+Alt+D) */
 const cam = { x:20.2, y:-1623.31, z:-525.32, yaw:2.7457, pitch:0.3788 };
-const vel = { yaw:0, pitch:0, dolly:0 };
+const vel = { yaw:0, pitch:0, dolly:0, strafe:0 };
 let warp = null;            // {t, dur, from:{...}, to:{...}, mood}
 let warpStreak = 0;
 
@@ -4568,13 +4610,17 @@ function project(px,py,pz, par=1){
 
 /* ── interacción: deriva, profundidad, warp ── */
 let dragging=false, px0=0, py0=0, moved=0, pinch0=0;
+let stickActive=false; /* true mientras el joystick izquierdo (vuelo) está en uso */
+let rstickActive=false, rstickYaw=0, rstickPitch=0; /* stick derecho: velocidad angular de mirada */
+const IS_TOUCH = matchMedia('(pointer: coarse)').matches; /* mobile usa joystick, no drag-to-rotate */
 let aimX = innerWidth/2, aimY = innerHeight/2;   /* punto al que apuntás */
 addEventListener('pointermove', e => { aimX = e.clientX; aimY = e.clientY; }, {passive:true});
 addEventListener('pointerdown', e => { aimX = e.clientX; aimY = e.clientY; }, {passive:true});
 const surf = document.body;
 let holdTimer=null;
 surf.addEventListener('pointerdown', e => {
-  if (e.target.closest('#summon,#portal,#tune .t-enter,#summon-btn,#sound-btn,#p-back')) return;
+  if (IS_TOUCH) return; /* mobile navega con el joystick, no con drag */
+  if (e.target.closest('#summon,#portal,#tune .t-enter,#summon-btn,#sound-btn,#p-back,#joystick')) return;
   dragging = true; moved = 0; px0=e.clientX; py0=e.clientY;
   /* mantener apretado en el vacío invoca la corriente */
   clearTimeout(holdTimer);
@@ -4611,6 +4657,80 @@ addEventListener('touchmove', e => {
 }, {passive:true});
 addEventListener('touchend', ()=> pinch0=0);
 
+/* ── joysticks virtuales: en mobile reemplazan drag-to-rotate.
+   Izquierdo = vuelo (adelante/atrás/strafe). Derecho = mirar (yaw/pitch),
+   como el stick derecho de un control de consola. ── */
+function makeStick(joyEl, baseEl, stickEl, onMove, onEnd){
+  joyEl.classList.add('on');
+  let id=null, bx=0, by=0, R=1;
+  function setStick(dx, dy){
+    stickEl.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+  }
+  function start(e){
+    e.preventDefault();
+    if (id!==null) return; // ya hay un dedo controlando este stick
+    id = e.pointerId;
+    baseEl.setPointerCapture && baseEl.setPointerCapture(id);
+    const r = baseEl.getBoundingClientRect();
+    bx = r.left + r.width/2; by = r.top + r.height/2; R = r.width/2;
+    joyEl.classList.add('active');
+    move(e);
+  }
+  function move(e){
+    if (id===null || e.pointerId!==id) return;
+    e.preventDefault();
+    let dx = e.clientX - bx, dy = e.clientY - by;
+    const d = Math.hypot(dx,dy);
+    if (d > R){ dx = dx/d*R; dy = dy/d*R; }
+    setStick(dx, dy);
+    const nx = dx/R, ny = dy/R; // -1..1
+    const mag = Math.hypot(nx,ny);
+    if (mag < 0.08){ onMove(0,0,0); return; } // deadzone chica: el temblor del dedo no genera drift
+    onMove(nx, ny, mag);
+    hintFade();
+  }
+  function end(e){
+    if (id===null || e.pointerId!==id) return;
+    id = null; joyEl.classList.remove('active');
+    setStick(0,0); onMove(0,0,0); onEnd && onEnd();
+  }
+  baseEl.addEventListener('pointerdown', start);
+  baseEl.addEventListener('pointermove', move);
+  baseEl.addEventListener('pointerup',   end);
+  baseEl.addEventListener('pointercancel', end);
+  return { get active(){ return id!==null; } };
+}
+
+(function(){
+  if (!IS_TOUCH) return;
+  document.body.classList.add('touch-nav');
+  $('hint').textContent = 'Stick izquierdo: volar · stick derecho: mirar · tocá una señal para sintonizarla';
+
+  const MAXV = 2600; // velocidad máxima de avance/strafe al stick a tope
+  const left = makeStick($('joystick'), $('joy-base'), $('joy-stick'),
+    (nx, ny) => {
+      stickActive = left.active;
+      vel.dolly  = clamp(-ny * MAXV, -MAXV, MAXV); // arriba (ny<0) = adelante
+      vel.strafe = clamp( nx * MAXV, -MAXV, MAXV); // derecha (nx>0) = strafe derecha
+    },
+    () => { stickActive = false; vel.dolly = 0; vel.strafe = 0; }
+  );
+
+  /* stick derecho: velocidad angular proporcional a la deflexión, como un gamepad real
+     (no un drag que arrastra acumulado — soltar el stick centra y la nave deja de girar) */
+  const MAXTURN = 2.0; // rad/seg a tope de deflexión
+  const right = makeStick($('joystick-r'), $('joy-r-base'), $('joy-r-stick'),
+    (nx, ny) => {
+      rstickActive = right.active;
+      rstickYaw   =  nx * MAXTURN;
+      rstickPitch =  ny * MAXTURN;
+    },
+    () => { rstickActive = false; rstickYaw = 0; rstickPitch = 0; }
+  );
+})();
+
+
+
 let hintHidden=false;
 function hintFade(){ if(!hintHidden){ hintHidden=true; $('hint').classList.add('fade'); } }
 
@@ -4632,6 +4752,8 @@ function rayThrough(mx, my){
 }
 function aimRay(){ return rayThrough(aimX, aimY); }
 function forwardVec(){ return rayThrough(CX, CY); }
+/* vector lateral de la nave (horizontal, perpendicular al forward) — para el strafe del joystick */
+function rightVec(){ return { x: Math.cos(cam.yaw), y: 0, z: -Math.sin(cam.yaw) }; }
 
 /* ── LA CORRIENTE: el universo te acerca qué ver ahora ── */
 const corr = { on:false, t:0, items:[] };
@@ -4820,18 +4942,27 @@ function frame(ts){
       cam.yaw -= vel.yaw; cam.pitch -= vel.pitch;
       cam.pitch = clamp(cam.pitch,-1.1,1.1);
       vel.yaw *= .94; vel.pitch *= .94;
-      if (!REDUCED) cam.yaw += dt*0.012;   /* deriva ambiental */
 
-      /* gravedad de foco: la señal sintonizada atrae suavemente la mirada */
-      if (focused && focused._p && Math.abs(vel.dolly) < 120 && !REDUCED){
-        const fp = focused._p;
-        cam.yaw   += ((fp.sx - CX)/FOV) * dt * 1.6;
-        cam.pitch += ((fp.sy - CY)/FOV) * dt * 1.6;
+      if (rstickActive){
+        /* stick derecho: gira la nave a velocidad angular constante, como un gamepad */
+        cam.yaw   += rstickYaw * dt;
+        cam.pitch += rstickPitch * dt;
         cam.pitch = clamp(cam.pitch,-1.1,1.1);
+      } else {
+        if (!REDUCED) cam.yaw += dt*0.012;   /* deriva ambiental */
+
+        /* gravedad de foco: la señal sintonizada atrae suavemente la mirada
+           (no aplica con ningún joystick activo: ahí el control de cámara es manual) */
+        if (focused && focused._p && Math.abs(vel.dolly) < 120 && !REDUCED && !stickActive){
+          const fp = focused._p;
+          cam.yaw   += ((fp.sx - CX)/FOV) * dt * 1.6;
+          cam.pitch += ((fp.sy - CY)/FOV) * dt * 1.6;
+          cam.pitch = clamp(cam.pitch,-1.1,1.1);
+        }
       }
     }
-    /* vuelo asistido: al sumergirte, la cabeza gira hacia donde volás */
-    if (!dragging && Math.abs(vel.dolly) > 160 && !REDUCED){
+    /* vuelo asistido: al sumergirte, la cabeza gira hacia donde volás (solo apuntando con el dedo, no con joystick) */
+    if (!dragging && !stickActive && !rstickActive && Math.abs(vel.dolly) > 160 && !REDUCED){
       const r = aimRay();
       const tyaw = Math.atan2(r.x, r.z);
       const tpitch = Math.asin(clamp(r.y,-1,1));
@@ -4842,11 +4973,16 @@ function frame(ts){
       cam.pitch += (tpitch - cam.pitch) * k;
       cam.pitch = clamp(cam.pitch,-1.1,1.1);
     }
-    if (Math.abs(vel.dolly) > 2){
-      const f = aimRay();
-      /* velocidad en unidades/seg + fricción exponencial (independiente del framerate) */
-      cam.x += f.x*vel.dolly*dt; cam.y += f.y*vel.dolly*dt; cam.z += f.z*vel.dolly*dt;
-      vel.dolly *= Math.exp((focused ? -3.4 : -2.4)*dt);
+    if (Math.abs(vel.dolly) > 2 || Math.abs(vel.strafe) > 2){
+      /* el joystick empuja en base a hacia dónde mira la nave (forward puro),
+         no hacia donde apunta el dedo — así arriba siempre es "adelante" */
+      const f = stickActive ? forwardVec() : aimRay();
+      const r = rightVec();
+      cam.x += f.x*vel.dolly*dt + r.x*vel.strafe*dt;
+      cam.y += f.y*vel.dolly*dt + r.y*vel.strafe*dt;
+      cam.z += f.z*vel.dolly*dt + r.z*vel.strafe*dt;
+      vel.dolly  *= Math.exp((focused ? -3.4 : -2.4)*dt);
+      vel.strafe *= Math.exp((focused ? -3.4 : -2.4)*dt);
       /* borde blando: el continuo te devuelve con un resorte, sin frenazo */
       const dd = Math.hypot(cam.x,cam.z);
       if (dd > 10000){
@@ -4854,9 +4990,10 @@ function frame(ts){
         cam.x -= cam.x*over*Math.min(1, dt*4);
         cam.z -= cam.z*over*Math.min(1, dt*4);
         vel.dolly *= Math.exp(-4*dt);
+        vel.strafe *= Math.exp(-4*dt);
       }
       if (Math.abs(cam.y) > 1700) cam.y = lerp(cam.y, Math.sign(cam.y)*1700, Math.min(1, dt*5));
-    } else vel.dolly = 0;
+    } else { vel.dolly = 0; vel.strafe = 0; }
   }
 
   animateNodes();
