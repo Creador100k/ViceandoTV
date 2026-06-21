@@ -5660,14 +5660,21 @@ window.sfxWarp = function(dur){
 /* ── GÉNESIS / BOOT ── */
 let allChannels = null; // caché para rebuilds de modo
 async function boot(){
-  let channels = buildDlhd();
-  allChannels = channels;
-  buildSpace(channels); countSuns();
+  const baseDlhd = buildDlhd();
+  allChannels = baseDlhd;
+  buildSpace(baseDlhd); countSuns();
   try{
     const [chs, sts] = await Promise.all([
       fetch(`${RAW}/channels.json`).then(r=>r.json()),
       fetch(`${API}/streams.json`).then(r=>r.json()),
     ]);
+    /* ceder el hilo principal un instante antes del trabajo pesado de
+       parseo+filtrado+reconstrucción: si todo corre de un tirón justo
+       después de que responde la red, es un bloqueo largo y sostenido
+       del hilo principal — eso es lo que dispara el watchdog de WebKit
+       en iOS y mata/recarga la pestaña, incluso si el FPS ya se
+       recuperó para cuando el kill efectivamente ocurre. ── */
+    await new Promise(r => setTimeout(r, 0));
     const withStreams = new Set(sts.filter(s=>!s.is_nsfw && s.url).map(s=>s.channel));
     let iptv = chs.filter(c => c.name && !c.is_nsfw && withStreams.has(c.id));
     /* curaduría: priorizar señales con logo, balancear por constelación */
@@ -5681,8 +5688,9 @@ async function boot(){
       picked.push(...arr.slice(0,CAP));
     });
     const names = new Set(picked.map(c=>c.name.toLowerCase().trim()));
-    channels = [...picked, ...buildDlhd().filter(c=>!names.has(c.name.toLowerCase().trim()))];
+    const channels = [...picked, ...baseDlhd.filter(c=>!names.has(c.name.toLowerCase().trim()))];
     allChannels = channels;
+    await new Promise(r => setTimeout(r, 0)); // ceder de nuevo antes de buildSpace (la parte más cara)
     buildSpace(channels); countSuns();
   }catch(e){ /* el continuo arranca igual con deportes */ }
 }
