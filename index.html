@@ -182,6 +182,13 @@ body.touch-nav #summon-btn{bottom:calc(170px + env(safe-area-inset-bottom,0))}
 #portal.on{display:block}
 #portal video,#portal iframe{position:absolute;inset:0;width:100%;height:100%;border:0;background:#000}
 #portal video{object-fit:contain}
+/* sobre un iframe de otro dominio el documento no recibe pointermove
+   (política de mismo origen): esta capa transparente se activa SOLO
+   cuando el HUD ya está dormido en modo iframe, para detectar el primer
+   movimiento y despertarlo; se desactiva al toque para no robarle
+   los clicks reales al reproductor embebido ── */
+#p-wake{position:absolute;inset:0;z-index:1;display:none;pointer-events:none}
+#portal.calm.iframe-mode #p-wake{display:block;pointer-events:auto}
 #p-veil{position:absolute;inset:0;pointer-events:none;z-index:2;
   background:linear-gradient(180deg,rgba(0,0,0,.75),transparent 26%,transparent 70%,rgba(0,0,0,.8));
   opacity:1;transition:opacity .5s}
@@ -318,6 +325,7 @@ body.touch-nav #summon-btn{bottom:calc(170px + env(safe-area-inset-bottom,0))}
   <div id="p-status"><span>Cruzando el umbral…</span></div>
   <video id="p-video" playsinline autoplay style="display:none"></video>
   <iframe id="p-frame" allow="autoplay; encrypted-media; fullscreen" allowfullscreen style="display:none"></iframe>
+  <div id="p-wake" aria-hidden="true"></div>
   <div id="p-veil"></div>
   <div id="p-top">
     <button id="p-back" aria-label="Volver al continuo"><svg viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6"/></svg></button>
@@ -5302,9 +5310,13 @@ function frame(ts){
       }
     }
     ctx.globalAlpha = a;
-    /* video EN VIVO dentro del orbe sintonizado */
+    /* video EN VIVO dentro del orbe sintonizado: cuando arranca a
+       reproducir, el orbe crece hasta 3x su tamaño para que se vea
+       mejor, con una transición suave (no un salto brusco) ── */
+    const wantsBig = isF && pvReady && pvNode===n;
+    n.pvScale = lerp(n.pvScale ?? 1, wantsBig ? 3 : 1, .1);
     if (isF && pvReady && pvNode===n && pv.videoWidth){
-      const vr = Math.max(r, 14);
+      const vr = Math.max(r, 14) * n.pvScale;
       ctx.save();
       ctx.beginPath(); ctx.arc(p.sx,p.sy,vr,0,7); ctx.clip();
       const va = pv.videoWidth/pv.videoHeight, dia = vr*2;
@@ -5492,13 +5504,17 @@ function tuneStream(s){
   if (s.iframe || (!isM3u8 && /\.php|embed|player/i.test(s.url))){
     f.src = s.iframe || s.url; f.style.display='block';
     $('p-status').style.display='none';
-    /* dentro de un iframe el puntero no nos llega: el HUD no se duerme nunca */
-    clearTimeout(calmTimer);
-    $('portal').classList.remove('calm');
+    /* dentro de un iframe de otro dominio el documento no recibe
+       pointermove directamente, así que el HUD igual se duerme con
+       el mismo timer; #p-wake (ver CSS) detecta el primer movimiento
+       sobre el iframe para poder despertarlo de nuevo ── */
     portalIframeMode = true;
+    $('portal').classList.add('iframe-mode');
+    scheduleCalm();
     return;
   }
   portalIframeMode = false;
+  $('portal').classList.remove('iframe-mode');
   const show=()=>{ $('p-status').style.display='none'; v.style.display='block'; };
   if (HLS_OK() && isM3u8){
     hlsInst = new Hls({ xhrSetup(x){ if(s.http_referrer) try{x.setRequestHeader('Referer', s.http_referrer);}catch(e){} } });
@@ -5508,26 +5524,38 @@ function tuneStream(s){
   } else if (v.canPlayType('application/vnd.apple.mpegurl')){
     v.src = s.url; v.addEventListener('loadedmetadata', ()=>{ show(); v.play().catch(()=>{}); }, {once:true});
   } else {
+    /* último recurso: ni Hls.js ni soporte nativo disponibles, se
+       intenta igual por iframe — mismo trato de HUD que el modo iframe */
     f.src = s.url; f.style.display='block'; $('p-status').style.display='none';
+    portalIframeMode = true;
+    $('portal').classList.add('iframe-mode');
+    scheduleCalm();
   }
 }
 function closePortal(){
   clearTimeout(calmTimer);
-  $('portal').classList.remove('on','calm');
+  $('portal').classList.remove('on','calm','iframe-mode');
   resetMedia();
 }
 $('p-back').addEventListener('click', closePortal);
 /* si el iframe roba el foco, Escape deja de llegar al documento:
    al volver el puntero al chrome del portal recuperamos el foco */
 $('p-back').addEventListener('pointerenter', ()=> window.focus());
-/* el HUD del portal se duerme; cualquier gesto lo despierta */
+/* el HUD del portal se duerme; cualquier gesto lo despierta.
+   En modo iframe, #p-wake hace de proxy: solo intercepta cuando el
+   HUD ya está dormido, y se desactiva al instante para no robarle
+   los clicks reales al reproductor embebido ── */
 function scheduleCalm(){
   clearTimeout(calmTimer);
-  if (portalIframeMode) return;
-  calmTimer = setTimeout(()=> $('portal').classList.add('calm'), 3500);
+  calmTimer = setTimeout(()=> $('portal').classList.add('calm'), 3000);
 }
 $('portal').addEventListener('pointermove', ()=>{ $('portal').classList.remove('calm'); scheduleCalm(); });
 $('portal').addEventListener('pointerdown', ()=>{ $('portal').classList.remove('calm'); scheduleCalm(); });
+/* #p-wake solo es interactivo cuando el HUD ya está dormido en modo
+   iframe (ver CSS): un primer movimiento ahí despierta el HUD igual
+   que pointermove sobre el resto del portal ── */
+$('p-wake').addEventListener('pointermove', ()=>{ $('portal').classList.remove('calm'); scheduleCalm(); });
+$('p-wake').addEventListener('pointerdown', ()=>{ $('portal').classList.remove('calm'); scheduleCalm(); });
 
 /* ── INVOCACIÓN ── */
 const summon=$('summon'), sInput=$('summon-input');
