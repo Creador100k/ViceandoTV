@@ -4362,6 +4362,15 @@ let constellationMode = 'country';
 /* detección de dispositivo táctil: gatea joystick, calidad inicial,
    cap de canales y concurrencia de carga de imágenes en mobile */
 const IS_TOUCH = matchMedia('(pointer: coarse)').matches;
+/* iOS/iPadOS: hls.js detecta MediaSource (vía ManagedMediaSource) como
+   "soportado" en iOS moderno, pero hay un bug documentado donde igual
+   termina inestable — memoria creciendo sin techo hasta que WebKit mata
+   y recarga la pestaña a los 1-2 minutos (el síntoma exacto reportado).
+   iOS tiene soporte NATIVO de HLS desde siempre vía el tag <video>, así
+   que ahí forzamos ese camino sin pasar por Hls.isSupported(). ── */
+const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+  (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1); // iPadOS moderno se reporta como Mac
+const HLS_OK = () => window.Hls && Hls.isSupported() && !IS_IOS;
 
 const cv = $('space'), ctx = cv.getContext('2d');
 let W=0, H=0, CX=0, CY=0, DPR=1;
@@ -4990,7 +4999,7 @@ function startPreview(node){
   pvTimer = setTimeout(()=>{
     if (focused !== node) return;
     try{
-      if (window.Hls && Hls.isSupported()){
+      if (HLS_OK()){
         pvHls = new Hls({ capLevelToPlayerSize:true, maxBufferLength:6 });
         pvHls.loadSource(st.url); pvHls.attachMedia(pv);
         pvHls.on(Hls.Events.MANIFEST_PARSED, ()=> pv.play().catch(()=>{}));
@@ -5082,6 +5091,7 @@ function tuneQuality(dt){
 }
 function frame(ts){
   requestAnimationFrame(frame);
+  if (document.hidden) { last = ts; return; } /* pestaña en background: no gastar CPU/GPU ahí */
   const dt = Math.min(.05, (ts-last)/1000 || .016); last = ts; T += dt;
   tuneQuality(dt);
 
@@ -5457,7 +5467,7 @@ function tuneStream(s){
   }
   portalIframeMode = false;
   const show=()=>{ $('p-status').style.display='none'; v.style.display='block'; };
-  if (window.Hls && Hls.isSupported() && isM3u8){
+  if (HLS_OK() && isM3u8){
     hlsInst = new Hls({ xhrSetup(x){ if(s.http_referrer) try{x.setRequestHeader('Referer', s.http_referrer);}catch(e){} } });
     hlsInst.loadSource(s.url); hlsInst.attachMedia(v);
     hlsInst.on(Hls.Events.MANIFEST_PARSED, ()=>{ show(); v.play().catch(()=>{}); });
@@ -5659,6 +5669,18 @@ function countSuns(){
 }
 
 boot();
+/* pestaña en background: el render ya se frena en frame() (arriba).
+   Acá también pausamos audio y video, otra fuente de trabajo sostenido
+   que WebKit penaliza fuerte si sigue activo sin que se vea la pantalla ── */
+document.addEventListener('visibilitychange', ()=>{
+  if (document.hidden){
+    if (AC && AC.state === 'running') AC.suspend().catch(()=>{});
+    try{ pv.pause(); }catch(e){}
+    try{ $('p-video').pause(); }catch(e){}
+  } else {
+    if (AC && AC.state === 'suspended' && soundOn) AC.resume().catch(()=>{});
+  }
+});
 /* despertar mirando hacia tu última zona, no siempre al mismo punto */
 try{
   const c = JSON.parse(localStorage.getItem(CAM_KEY)||'null');
