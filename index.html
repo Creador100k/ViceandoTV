@@ -210,7 +210,7 @@ body.touch-nav #summon-btn{bottom:calc(170px + env(safe-area-inset-bottom,0))}
 #p-back svg{width:18px;height:18px;stroke:var(--signal);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 #p-name{font-family:'Syne',sans-serif;font-weight:800;font-size:clamp(17px,3vw,26px);line-height:1.05}
 #p-origin{font-size:11px;letter-spacing:3px;text-transform:uppercase;color:var(--signal-dim);margin-top:3px}
-#p-status{position:absolute;inset:0;z-index:1;display:flex;align-items:center;justify-content:center;
+#p-status{position:absolute;inset:0;z-index:1;display:none;align-items:center;justify-content:center;
   flex-direction:column;gap:18px;color:var(--signal-dim);font-size:11px;letter-spacing:4px;text-transform:uppercase}
 @keyframes spin{to{transform:rotate(360deg)}}
 
@@ -323,8 +323,8 @@ body.touch-nav #summon-btn{bottom:calc(170px + env(safe-area-inset-bottom,0))}
 
 <div id="portal">
   <div id="p-status"><span>Cruzando el umbral…</span></div>
-  <video id="p-video" playsinline autoplay style="display:none"></video>
-  <iframe id="p-frame" allow="autoplay; encrypted-media; fullscreen" allowfullscreen style="display:none"></iframe>
+  <video id="p-video" playsinline autoplay disablePictureInPicture disableRemotePlayback style="display:none"></video>
+  <iframe id="p-frame" allow="autoplay; encrypted-media; fullscreen; picture-in-picture 'none'" allowfullscreen style="display:none"></iframe>
   <div id="p-wake" aria-hidden="true"></div>
   <div id="p-veil"></div>
   <div id="p-top">
@@ -4761,8 +4761,8 @@ let dragging=false, px0=0, py0=0, moved=0, pinch0=0;
 let stickActive=false; /* true mientras el joystick izquierdo (vuelo) está en uso */
 let rstickActive=false, rstickYaw=0, rstickPitch=0; /* stick derecho: velocidad angular de mirada */
 let aimX = innerWidth/2, aimY = innerHeight/2;   /* punto al que apuntás */
-addEventListener('pointermove', e => { aimX = e.clientX; aimY = e.clientY; }, {passive:true});
-addEventListener('pointerdown', e => { aimX = e.clientX; aimY = e.clientY; }, {passive:true});
+addEventListener('pointermove', e => { if (!$('portal').classList.contains('on')){ aimX = e.clientX; aimY = e.clientY; } }, {passive:true});
+addEventListener('pointerdown', e => { if (!$('portal').classList.contains('on')){ aimX = e.clientX; aimY = e.clientY; } }, {passive:true});
 const surf = document.body;
 let holdTimer=null;
 surf.addEventListener('pointerdown', e => {
@@ -5131,7 +5131,8 @@ function tuneQuality(dt){
 }
 function frame(ts){
   requestAnimationFrame(frame);
-  if (document.hidden) { last = ts; return; } /* pestaña en background: no gastar CPU/GPU ahí */
+  if (document.hidden) { last = ts; return; }
+  if ($('portal').classList.contains('on')) { last = ts; return; }
   const dt = Math.min(.05, (ts-last)/1000 || .016); last = ts; T += dt;
   tuneQuality(dt);
 
@@ -5448,6 +5449,11 @@ function resetMedia(){
   f.src='about:blank'; f.style.display='none';
 }
 function enterSignal(node){
+  /* cancelar hold-timer y drag para que no disparen summonCurrent
+     ni handleTap después de abrir el portal */
+  clearTimeout(holdTimer); holdTimer = null;
+  dragging = false;
+  focused = null;
   stopPreview();
   visits[node.ch.id] = (visits[node.ch.id]||0) + 1;
   saveVisits();
@@ -5520,7 +5526,7 @@ function tuneStream(s){
     hlsInst = new Hls({ xhrSetup(x){ if(s.http_referrer) try{x.setRequestHeader('Referer', s.http_referrer);}catch(e){} } });
     hlsInst.loadSource(s.url); hlsInst.attachMedia(v);
     hlsInst.on(Hls.Events.MANIFEST_PARSED, ()=>{ show(); v.play().catch(()=>{}); });
-    hlsInst.on(Hls.Events.ERROR, (_,d)=>{ if(d.fatal) $('p-status').innerHTML='<span>Señal inestable. Probá otro orbe.</span>'; });
+    hlsInst.on(Hls.Events.ERROR, (_,d)=>{ if(d.fatal){ $('p-status').innerHTML='<span>Señal inestable. Probá otro orbe.</span>'; $('p-status').style.display='flex'; } });
   } else if (v.canPlayType('application/vnd.apple.mpegurl')){
     v.src = s.url; v.addEventListener('loadedmetadata', ()=>{ show(); v.play().catch(()=>{}); }, {once:true});
   } else {
@@ -5536,6 +5542,8 @@ function closePortal(){
   clearTimeout(calmTimer);
   $('portal').classList.remove('on','calm','iframe-mode');
   resetMedia();
+  focused = null;
+  stopPreview();
 }
 $('p-back').addEventListener('click', closePortal);
 /* si el iframe roba el foco, Escape deja de llegar al documento:
@@ -5752,10 +5760,16 @@ boot();
 document.addEventListener('visibilitychange', ()=>{
   if (document.hidden){
     if (AC && AC.state === 'running') AC.suspend().catch(()=>{});
-    try{ pv.pause(); }catch(e){}
+    stopPreview();
     try{ $('p-video').pause(); }catch(e){}
   } else {
     if (AC && AC.state === 'suspended' && soundOn) AC.resume().catch(()=>{});
+    try{
+      const v = $('p-video');
+      if (v && v.src && v.paused && $('portal').classList.contains('on') && !portalIframeMode){
+        v.play().catch(()=>{});
+      }
+    }catch(e){}
   }
 });
 /* despertar mirando hacia tu última zona, no siempre al mismo punto */
