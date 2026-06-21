@@ -4430,8 +4430,15 @@ function drawGlow(x, y, rad, hue, alphaHex){
 /* ── cola de carga de logos con concurrencia limitada ──
    sin esto, entrar de golpe a una constelación densa dispara decenas de
    descargas+decodificaciones de imagen simultáneas: en mobile eso es lo que
-   va saturando memoria sesión tras sesión hasta que la página se traba. ── */
-const IMG_MAX_CONCURRENT = IS_TOUCH ? 3 : 8;
+   va saturando memoria sesión tras sesión hasta que la página se traba.
+   Además: los logos son remotos (terceros, dataset público) y pueden venir
+   en resolución mucho mayor a los ~40px en que se dibujan. Decodificar
+   imágenes grandes es caro en CPU/memoria, y iOS Safari tiene un leak
+   conocido si un canvas usado para procesarlas no se libera explícitamente
+   (poniendo width/height en 0) — por eso acá redibujamos el logo en un
+   canvas chico del tamaño real necesario y soltamos la imagen original. ── */
+const IMG_MAX_CONCURRENT = IS_TOUCH ? 2 : 8;
+const LOGO_PX = 96; // tamaño final cacheado (de sobra para el radio máximo en pantalla)
 let imgLoading = 0;
 const imgQueue = [];
 function queueLogoLoad(node){
@@ -4440,12 +4447,36 @@ function queueLogoLoad(node){
   imgQueue.push(node);
   pumpImgQueue();
 }
+function shrinkLogo(im){
+  const c = document.createElement('canvas');
+  c.width = c.height = LOGO_PX;
+  const sctx = c.getContext('2d');
+  /* cover: llenar el cuadrado recortando el sobrante, igual que antes con drawImage directo */
+  const s = Math.max(LOGO_PX/im.naturalWidth, LOGO_PX/im.naturalHeight);
+  const dw = im.naturalWidth*s, dh = im.naturalHeight*s;
+  sctx.drawImage(im, (LOGO_PX-dw)/2, (LOGO_PX-dh)/2, dw, dh);
+  /* soltar la imagen grande original — solo nos quedamos con el canvas chico */
+  im.src = '';
+  im.width = im.height = 0;
+  return c;
+}
 function pumpImgQueue(){
   while (imgLoading < IMG_MAX_CONCURRENT && imgQueue.length){
     const node = imgQueue.shift();
     imgLoading++;
     const im = new Image();
-    im.onload = im.onerror = ()=>{ imgLoading--; if (im.complete && im.naturalWidth) node.img = im; pumpImgQueue(); };
+    im.decoding = 'async';
+    im.onload = ()=>{
+      imgLoading--;
+      if (im.complete && im.naturalWidth) {
+        try{ node.img = shrinkLogo(im); }catch(e){ node.img = null; }
+      }
+      /* en mobile espaciamos un toque la siguiente carga: evita que varias
+         decodificaciones caigan en el mismo frame cuando muchos nodos
+         entran en rango de golpe (ej. justo al terminar el boot) ── */
+      if (IS_TOUCH) setTimeout(pumpImgQueue, 60); else pumpImgQueue();
+    };
+    im.onerror = ()=>{ imgLoading--; pumpImgQueue(); };
     im.src = node.ch.logo;
   }
 }
@@ -5375,7 +5406,7 @@ function frame(ts){
       ctx.globalAlpha = kk;
       ctx.fillStyle=g; ctx.beginPath(); ctx.arc(ox,cyy,r*2.4,0,7); ctx.fill();
       /* orbe con logo si existe */
-      if (!it.imgTried && it.ch.logo){ it.imgTried=true; const im=new Image(); im.onload=()=>it.img=im; im.src=it.ch.logo; }
+      if (!it.imgTried && it.ch.logo){ it.imgTried=true; const im=new Image(); im.decoding='async'; im.onload=()=>{ try{ it.img = shrinkLogo(im); }catch(e){} }; im.src=it.ch.logo; }
       ctx.save();
       ctx.beginPath(); ctx.arc(ox,cyy,r,0,7); ctx.clip();
       ctx.fillStyle='rgba(240,237,232,.95)'; ctx.fillRect(ox-r,cyy-r,r*2,r*2);
