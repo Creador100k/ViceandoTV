@@ -5089,10 +5089,31 @@ function tuneQuality(dt){
   if (dt > .03){ if (++slowFrames > 50){ QUALITY=Math.max(0,QUALITY-1); slowFrames=0; fastFrames=0; } }
   else if (dt < .02){ if (++fastFrames > 600 && QUALITY<2){ QUALITY++; fastFrames=0; } slowFrames=Math.max(0,slowFrames-2); }
 }
+/* ── HUD de diagnóstico temporal: FPS en vivo + conteo de recursos.
+   Sacar una vez identificada la causa del lag/crash en iOS. ── */
+const DBG = document.createElement('div');
+DBG.style.cssText = 'position:fixed;top:6px;left:6px;z-index:9999;background:rgba(0,0,0,.7);color:#0f0;font:11px monospace;padding:4px 7px;border-radius:4px;pointer-events:none;white-space:pre;line-height:1.4';
+document.body.appendChild(DBG);
+let dbgFrames=0, dbgT0=performance.now(), dbgFPS=0, dbgWorstMs=0;
+function dbgTick(frameMs){
+  dbgFrames++;
+  if (frameMs > dbgWorstMs) dbgWorstMs = frameMs;
+  const now = performance.now();
+  if (now - dbgT0 >= 500){
+    dbgFPS = Math.round(dbgFrames / ((now-dbgT0)/1000));
+    dbgFrames = 0; dbgT0 = now;
+    const imgsLoaded = nodes.filter(n=>n.img).length;
+    let mem = '';
+    if (performance.memory) mem = `\nheap: ${(performance.memory.usedJSHeapSize/1048576).toFixed(1)}MB`;
+    DBG.textContent = `fps:${dbgFPS} worst:${dbgWorstMs.toFixed(0)}ms\nnodes:${nodes.length} imgs:${imgsLoaded} dust:${dust.length}\nimgQ:${imgQueue.length} loading:${imgLoading}\nAC:${typeof AC!=='undefined'&&AC?AC.state:'-'}${mem}`;
+    dbgWorstMs = 0;
+  }
+}
 function frame(ts){
   requestAnimationFrame(frame);
   if (document.hidden) { last = ts; return; } /* pestaña en background: no gastar CPU/GPU ahí */
   const dt = Math.min(.05, (ts-last)/1000 || .016); last = ts; T += dt;
+  const __dbgStart = performance.now();
   tuneQuality(dt);
 
   /* física de cámara */
@@ -5385,6 +5406,7 @@ function frame(ts){
 
   if (!corr.on) updateFocus();
   else { $('tune').classList.remove('on'); document.body.classList.remove('locked'); }
+  dbgTick(performance.now() - __dbgStart);
 }
 requestAnimationFrame(frame);
 </script>
